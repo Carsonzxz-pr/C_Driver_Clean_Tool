@@ -136,17 +136,26 @@ class CDiskCleaner:
                 return cleaned_size
             
             # 先计算要删除的总大小
-            original_size = self.get_folder_size(folder_path)
-            
+            size_before = self.get_folder_size(folder_path)
             if progress_callback:
-                progress_callback(f"正在快速清理: {folder_path}")
+                progress_callback(f"扫描完成: {os.path.basename(folder_path)} - {self.format_size(size_before)}")
+            
+            if size_before == 0:
+                return 0
             
             # 方法1: 使用Windows原生命令快速删除
             if self.fast_delete_with_cmd(folder_path, progress_callback):
-                cleaned_size = original_size
+                # 计算清理后的实际大小
+                size_after = 0
+                if os.path.exists(folder_path):
+                    size_after = self.get_folder_size(folder_path)
+                cleaned_size = size_before - size_after
             else:
                 # 方法2: 如果命令失败，使用优化的Python删除
                 cleaned_size = self.clean_folder_optimized(folder_path, progress_callback)
+            
+            if progress_callback and cleaned_size > 0:
+                progress_callback(f"✓ 清理完成: {os.path.basename(folder_path)} - 释放 {self.format_size(cleaned_size)}")
                 
         except Exception as e:
             self.errors.append(f"清理文件夹失败 {folder_path}: {str(e)}")
@@ -163,25 +172,35 @@ class CDiskCleaner:
             if not os.path.exists(safe_path) or not os.path.isdir(safe_path):
                 return False
             
+            # 先计算文件夹大小来估算超时时间
+            folder_size = self.get_folder_size(safe_path)
+            timeout_seconds = max(60, min(300, folder_size // (50 * 1024 * 1024) * 30))  # 每50MB给30秒
+            
             if progress_callback:
-                progress_callback(f"使用系统命令快速清理: {os.path.basename(safe_path)}")
+                progress_callback(f"批量删除: {os.path.basename(safe_path)} (预计{timeout_seconds}秒)")
             
-            # 使用del命令删除所有文件（包括隐藏文件和只读文件）
-            cmd_files = f'del /f /s /q "{safe_path}\\*.*"'
-            result_files = subprocess.run(cmd_files, shell=True, capture_output=True, text=True, timeout=60)
+            try:
+                # 使用del命令删除所有文件（包括隐藏文件和只读文件）
+                cmd_files = f'del /f /s /q "{safe_path}\\*.*"'
+                result_files = subprocess.run(cmd_files, shell=True, capture_output=True, text=True, timeout=timeout_seconds)
+                
+                # 使用rmdir命令删除空文件夹
+                cmd_dirs = f'for /d %i in ("{safe_path}\\*") do rmdir /s /q "%i"'
+                result_dirs = subprocess.run(cmd_dirs, shell=True, capture_output=True, text=True, timeout=60)
+                
+                # 检查是否成功
+                if progress_callback:
+                    progress_callback(f"✓ 批量删除完成: {os.path.basename(safe_path)}")
+                return True
+                
+            except subprocess.TimeoutExpired:
+                if progress_callback:
+                    progress_callback(f"⏰ 批量删除超时: {os.path.basename(safe_path)}")
+                return False
             
-            # 使用rmdir命令删除空文件夹
-            cmd_dirs = f'for /d %i in ("{safe_path}\\*") do rmdir /s /q "%i"'
-            result_dirs = subprocess.run(cmd_dirs, shell=True, capture_output=True, text=True, timeout=60)
-            
-            # 检查是否成功（即使有一些错误也认为成功，因为可能是权限问题）
-            return True
-            
-        except subprocess.TimeoutExpired:
-            self.errors.append(f"批量删除超时: {folder_path}")
-            return False
         except Exception as e:
-            self.errors.append(f"批量删除失败 {folder_path}: {str(e)}")
+            if progress_callback:
+                progress_callback(f"❌ 批量删除失败: {os.path.basename(folder_path)}")
             return False
     
     def clean_folder_optimized(self, folder_path, progress_callback=None):
@@ -251,26 +270,42 @@ class CDiskCleaner:
         """运行Windows磁盘清理工具"""
         try:
             if progress_callback:
-                progress_callback("启动Windows磁盘清理工具...")
+                progress_callback("正在启动Windows系统磁盘清理...")
             
-            # 使用cleanmgr命令清理C盘
-            result = subprocess.run([
-                'cleanmgr', '/sagerun:1'
-            ], capture_output=True, text=True, timeout=300)
+            # 方法1: 尝试使用cleanmgr的自动模式
+            try:
+                result = subprocess.run([
+                    'cleanmgr', '/d', 'C:', '/verylowdisk'
+                ], capture_output=True, text=True, timeout=60)
+                
+                if result.returncode == 0:
+                    if progress_callback:
+                        progress_callback("✓ Windows系统磁盘清理完成")
+                    return True
+            except:
+                pass
             
-            if result.returncode == 0:
+            # 方法2: 使用基本的cleanmgr命令
+            try:
                 if progress_callback:
-                    progress_callback("Windows磁盘清理完成")
+                    progress_callback("使用基础磁盘清理命令...")
+                
+                result = subprocess.run([
+                    'cleanmgr', '/d', 'C:'
+                ], capture_output=True, text=True, timeout=60)
+                
+                if progress_callback:
+                    progress_callback("✓ 磁盘清理工具已启动")
                 return True
-            else:
-                self.errors.append(f"磁盘清理工具执行失败: {result.stderr}")
+                
+            except Exception as e:
+                if progress_callback:
+                    progress_callback(f"磁盘清理工具启动失败: {str(e)}")
+                self.errors.append(f"启动磁盘清理工具失败: {str(e)}")
                 return False
                 
-        except subprocess.TimeoutExpired:
-            self.errors.append("磁盘清理工具执行超时")
-            return False
         except Exception as e:
-            self.errors.append(f"启动磁盘清理工具失败: {str(e)}")
+            self.errors.append(f"磁盘清理失败: {str(e)}")
             return False
     
     def perform_cleanup(self, selected_items, progress_callback=None):
@@ -351,52 +386,213 @@ class CDiskCleaner:
         if progress_callback:
             progress_callback("启动超快速清理模式...")
         
-        # 计算总大小
-        total_size = sum(item.get('size', 0) for item in selected_items)
-        
         try:
-            # 创建临时批处理文件进行批量删除
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.bat', delete=False) as bat_file:
-                bat_file.write('@echo off\n')
-                bat_file.write('echo 开始快速清理...\n')
-                
-                for item in selected_items:
-                    path = item['path']
-                    if os.path.exists(path):
-                        # 删除文件
-                        bat_file.write(f'echo 清理: {item["name"]}\n')
-                        bat_file.write(f'del /f /s /q "{path}\\*.*" 2>nul\n')
-                        # 删除空文件夹
-                        bat_file.write(f'for /d %%i in ("{path}\\*") do rmdir /s /q "%%i" 2>nul\n')
-                
-                bat_file.write('echo 清理完成!\n')
-                bat_filename = bat_file.name
+            # 先计算清理前的总大小
+            if progress_callback:
+                progress_callback("计算清理前文件大小...")
+            
+            total_size_before = 0
+            existing_paths = []
+            
+            for item in selected_items:
+                path = item['path']
+                if os.path.exists(path):
+                    size_before = self.get_folder_size(path)
+                    total_size_before += size_before
+                    existing_paths.append((item, path, size_before))
+                    if progress_callback:
+                        progress_callback(f"扫描: {item['name']} - {self.format_size(size_before)}")
+            
+            if not existing_paths:
+                if progress_callback:
+                    progress_callback("没有找到需要清理的文件")
+                return 0, []
             
             if progress_callback:
-                progress_callback("执行批量清理命令...")
+                progress_callback(f"开始清理，总大小: {self.format_size(total_size_before)}")
             
-            # 执行批处理文件
-            result = subprocess.run([bat_filename], capture_output=True, text=True, timeout=120)
-            
-            # 清理临时文件
-            try:
-                os.unlink(bat_filename)
-            except:
-                pass
-            
-            if result.returncode == 0:
-                self.cleaned_size = total_size  # 假设全部清理成功
+            # 使用Windows命令逐个清理文件夹
+            for item, path, size_before in existing_paths:
                 if progress_callback:
-                    progress_callback("超快速清理完成!")
-            else:
-                self.errors.append(f"批量清理执行失败: {result.stderr}")
+                    progress_callback(f"正在清理: {item['name']}")
                 
-        except subprocess.TimeoutExpired:
-            self.errors.append("批量清理超时")
+                try:
+                    # 根据文件大小动态设置超时时间
+                    timeout_seconds = max(60, min(300, size_before // (100 * 1024 * 1024) * 30))  # 每100MB给30秒，最少60秒，最多300秒
+                    
+                    if progress_callback:
+                        progress_callback(f"开始删除文件: {item['name']} (预计 {timeout_seconds}秒)")
+                    
+                    # 使用del命令删除文件
+                    cmd1 = f'del /f /s /q "{path}\\*.*"'
+                    result1 = subprocess.run(cmd1, shell=True, capture_output=True, text=True, timeout=timeout_seconds)
+                    
+                    if progress_callback:
+                        progress_callback(f"正在删除子文件夹: {item['name']}")
+                    
+                    # 使用for循环删除子文件夹
+                    cmd2 = f'for /d %i in ("{path}\\*") do @rmdir /s /q "%i"'
+                    result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=60)
+                    
+                    # 计算清理后的大小
+                    if progress_callback:
+                        progress_callback(f"验证清理结果: {item['name']}")
+                    
+                    size_after = 0
+                    if os.path.exists(path):
+                        size_after = self.get_folder_size(path)
+                    
+                    cleaned_this_item = size_before - size_after
+                    self.cleaned_size += cleaned_this_item
+                    
+                    if progress_callback:
+                        if cleaned_this_item > 0:
+                            progress_callback(f"✓ 完成: {item['name']} - 清理了 {self.format_size(cleaned_this_item)}")
+                        else:
+                            progress_callback(f"⚠ {item['name']} - 没有文件需要清理")
+                        
+                except subprocess.TimeoutExpired:
+                    # 超时时尝试fallback到标准模式
+                    if progress_callback:
+                        progress_callback(f"⏰ {item['name']} 清理超时，尝试标准方式...")
+                    
+                    try:
+                        # 使用标准Python方式清理这个项目
+                        cleaned_fallback = self.clean_folder_optimized(path, progress_callback)
+                        self.cleaned_size += cleaned_fallback
+                        if progress_callback:
+                            progress_callback(f"✓ 标准方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
+                    except Exception as fallback_e:
+                        self.errors.append(f"清理 {item['name']} 超时且fallback失败: {str(fallback_e)}")
+                        
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(f"❌ {item['name']} 清理失败，尝试标准方式...")
+                    
+                    try:
+                        # 出错时也尝试fallback到标准模式
+                        cleaned_fallback = self.clean_folder_optimized(path, progress_callback)
+                        self.cleaned_size += cleaned_fallback
+                        if progress_callback:
+                            progress_callback(f"✓ 标准方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
+                    except Exception as fallback_e:
+                        self.errors.append(f"清理 {item['name']} 失败: {str(e)}, fallback也失败: {str(fallback_e)}")
+            
+            if progress_callback:
+                progress_callback(f"超快速清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
+                
         except Exception as e:
             self.errors.append(f"超快速清理失败: {str(e)}")
+            if progress_callback:
+                progress_callback("超快速清理失败，切换到标准模式...")
             # fallback到普通清理模式
+            return self.perform_cleanup(selected_items, progress_callback)
+        
+        return self.cleaned_size, self.errors
+    
+    def perform_cleanup_smart(self, selected_items, progress_callback=None):
+        """智能清理模式 - 根据文件大小自动选择最佳清理方式"""
+        self.cleaned_size = 0
+        self.errors = []
+        
+        if progress_callback:
+            progress_callback("启动智能清理模式...")
+        
+        try:
+            # 首先启动系统清理（在后台运行）
+            cleanup_thread = threading.Thread(target=self.run_disk_cleanup, args=(progress_callback,))
+            cleanup_thread.daemon = True
+            cleanup_thread.start()
+            
+            # 分析各个清理项目的大小，决定使用哪种清理方式
+            small_items = []  # 小文件夹用标准模式
+            large_items = []  # 大文件夹用超快速模式
+            
+            for item in selected_items:
+                if not os.path.exists(item['path']):
+                    continue
+                    
+                size = item.get('size', 0)
+                if size > 500 * 1024 * 1024:  # 大于500MB用超快速模式
+                    large_items.append(item)
+                else:
+                    small_items.append(item)
+            
+            if progress_callback:
+                progress_callback(f"智能分析: {len(large_items)}个大项目用超快速模式, {len(small_items)}个小项目用标准模式")
+            
+            # 先处理大文件夹（超快速模式）
+            for item in large_items:
+                if progress_callback:
+                    progress_callback(f"超快速清理: {item['name']}")
+                
+                try:
+                    path = item['path']
+                    size_before = self.get_folder_size(path)
+                    
+                    # 动态超时时间
+                    timeout_seconds = max(60, min(300, size_before // (100 * 1024 * 1024) * 30))
+                    
+                    # 使用Windows命令清理
+                    cmd = f'del /f /s /q "{path}\\*.*" && for /d %i in ("{path}\\*") do @rmdir /s /q "%i"'
+                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout_seconds)
+                    
+                    # 计算清理效果
+                    size_after = self.get_folder_size(path) if os.path.exists(path) else 0
+                    cleaned = size_before - size_after
+                    self.cleaned_size += cleaned
+                    
+                    if progress_callback:
+                        progress_callback(f"✓ 超快速完成: {item['name']} - {self.format_size(cleaned)}")
+                        
+                except subprocess.TimeoutExpired:
+                    if progress_callback:
+                        progress_callback(f"⏰ {item['name']} 超时，切换到标准模式...")
+                    # 超时则用标准模式
+                    cleaned = self.clean_folder_optimized(path, progress_callback)
+                    self.cleaned_size += cleaned
+                    
+                except Exception as e:
+                    self.errors.append(f"智能清理 {item['name']} 失败: {str(e)}")
+            
+            # 再处理小文件夹（标准模式，并行）
+            if small_items:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                
+                def clean_small_item(item):
+                    try:
+                        cleaned = self.clean_folder_optimized(item['path'], progress_callback)
+                        return item['name'], cleaned, None
+                    except Exception as e:
+                        return item['name'], 0, str(e)
+                
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_to_item = {executor.submit(clean_small_item, item): item for item in small_items}
+                    
+                    for future in as_completed(future_to_item):
+                        item = future_to_item[future]
+                        try:
+                            name, cleaned, error = future.result()
+                            if error:
+                                self.errors.append(f"清理 {name} 失败: {error}")
+                            else:
+                                self.cleaned_size += cleaned
+                                if progress_callback:
+                                    progress_callback(f"✓ 标准完成: {name} - {self.format_size(cleaned)}")
+                        except Exception as e:
+                            self.errors.append(f"处理 {item['name']} 时出错: {str(e)}")
+            
+            # 等待系统清理完成
+            cleanup_thread.join(timeout=30)
+            
+            if progress_callback:
+                progress_callback(f"智能清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
+                
+        except Exception as e:
+            self.errors.append(f"智能清理失败: {str(e)}")
+            if progress_callback:
+                progress_callback("智能清理失败，使用标准模式...")
+            # fallback到标准清理模式
             return self.perform_cleanup(selected_items, progress_callback)
         
         return self.cleaned_size, self.errors
@@ -495,15 +691,26 @@ class CleanerGUI:
         mode_frame = ttk.LabelFrame(button_frame, text="清理模式", padding="2")
         mode_frame.pack(side=tk.LEFT, padx=(20, 0))
         
-        self.cleanup_mode = tk.StringVar(value="ultra_fast")
+        self.cleanup_mode = tk.StringVar(value="smart")
+        self.expert_mode = tk.BooleanVar(value=False)
         
-        mode_fast = ttk.Radiobutton(mode_frame, text="超快速⚡", variable=self.cleanup_mode, 
+        # 主要模式选择
+        mode_smart = ttk.Radiobutton(mode_frame, text="智能清理🧠", variable=self.cleanup_mode, 
+                                    value="smart")
+        mode_smart.pack(side=tk.LEFT)
+        
+        mode_fast = ttk.Radiobutton(mode_frame, text="极速清理⚡", variable=self.cleanup_mode, 
                                    value="ultra_fast")
-        mode_fast.pack(side=tk.LEFT)
+        mode_fast.pack(side=tk.LEFT, padx=(5, 0))
         
-        mode_normal = ttk.Radiobutton(mode_frame, text="标准", variable=self.cleanup_mode, 
-                                     value="normal")
-        mode_normal.pack(side=tk.LEFT, padx=(5, 0))
+        # 专家模式切换
+        expert_check = ttk.Checkbutton(mode_frame, text="专家", variable=self.expert_mode,
+                                     command=self.toggle_expert_mode)
+        expert_check.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 兼容模式（默认隐藏）
+        self.mode_normal = ttk.Radiobutton(mode_frame, text="兼容", variable=self.cleanup_mode, 
+                                         value="normal")
         
         # 模式说明
         mode_help = ttk.Label(mode_frame, text="💡", foreground="blue", cursor="hand2")
@@ -656,7 +863,10 @@ class CleanerGUI:
                 
                 # 根据选择的模式执行不同的清理方法
                 cleanup_mode = self.cleanup_mode.get()
-                if cleanup_mode == "ultra_fast":
+                if cleanup_mode == "smart":
+                    self.log_message("使用智能清理模式...")
+                    cleaned_size, errors = self.cleaner.perform_cleanup_smart(selected_items, progress_callback)
+                elif cleanup_mode == "ultra_fast":
                     self.log_message("使用超快速清理模式...")
                     cleaned_size, errors = self.cleaner.perform_cleanup_ultra_fast(selected_items, progress_callback)
                 else:
@@ -705,24 +915,46 @@ class CleanerGUI:
         """显示清理模式帮助信息"""
         help_text = """清理模式说明：
 
-🚀 超快速模式：
-• 使用Windows原生批处理命令
-• 并行删除多个文件夹
-• 速度提升5-10倍
-• 推荐用于大量文件清理
+🧠 智能清理（默认推荐）：
+• 程序自动选择最佳清理方式
+• 大文件用极速模式，小文件用安全模式
+• 智能避免各种问题，适合所有用户
+• 99%的情况下这是最佳选择
 
-📋 标准模式：
-• 逐个文件检查和删除
-• 详细的进度显示
-• 更安全，错误处理更完善
-• 适合谨慎的清理操作
+⚡ 极速清理：
+• 全部使用Windows批处理命令
+• 速度最快，但在某些环境可能不稳定
+• 适合高级用户和文件较少的情况
 
-💡 提示：
-• 超快速模式会显著提升清理速度
-• 两种模式都是安全的，只清理临时文件
-• 建议优先使用超快速模式"""
+🔧 兼容模式（专家选项）：
+• 逐个文件处理，最高兼容性
+• 适用于：企业环境、老旧系统、调试问题
+• 速度较慢，但几乎不会出错
+
+❓ 为什么需要多种模式：
+• 不同Windows版本和配置差异很大
+• 某些杀毒软件可能阻止批处理命令
+• 网络驱动器和特殊文件系统需要兼容处理
+• 调试时需要详细的错误信息
+
+💡 建议：
+• 新手用户：直接用智能清理
+• 高级用户：可尝试极速清理
+• 遇到问题：勾选"专家"使用兼容模式"""
         
         messagebox.showinfo("清理模式说明", help_text)
+        
+    def toggle_expert_mode(self):
+        """切换专家模式显示"""
+        if self.expert_mode.get():
+            # 显示兼容模式选项
+            self.mode_normal.pack(side=tk.LEFT, padx=(5, 0), before=self.mode_normal.master.children['!label'])
+        else:
+            # 隐藏兼容模式选项
+            self.mode_normal.pack_forget()
+            # 如果当前选择的是兼容模式，自动切换到智能模式
+            if self.cleanup_mode.get() == "normal":
+                self.cleanup_mode.set("smart")
         
     def run(self):
         """运行GUI"""
