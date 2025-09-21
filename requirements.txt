@@ -1,0 +1,17 @@
+# C盘自动清理工具依赖包
+# Python 3.6+ 内置模块，无需额外安装
+
+# 以下是程序使用的内置模块：
+# - tkinter (GUI界面)
+# - subprocess (执行系统命令)
+# - os, sys (系统操作)
+# - threading (多线程)
+# - pathlib (路径处理)
+# - json (配置文件)
+# - datetime (时间处理)
+# - tempfile, shutil (文件操作)
+
+# 如果您的Python环境缺少tkinter，请根据您的系统安装：
+# Ubuntu/Debian: sudo apt-get install python3-tk
+# CentOS/RHEL: sudo yum install tkinter
+# Windows: tkinter通常随Python一起安装
