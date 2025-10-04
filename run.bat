@@ -1,18 +1,32 @@
-@echo off
+﻿@echo off
+setlocal
 chcp 65001 >nul
+
 echo.
 echo ====================================
 echo    C盘自动清理工具 v1.2.0
 echo ====================================
 echo.
-echo 正在启动程序...
+
+set "EXE_PATH=%~dp0dist\C_Disk_Cleaner.exe"
+if exist "%EXE_PATH%" (
+    echo 检测到独立版程序，正在启动...
+    echo.
+    "%EXE_PATH%"
+    echo.
+    echo 程序已结束。
+    pause
+    goto :EOF
+)
+
+echo 未找到 dist\C_Disk_Cleaner.exe，尝试使用本地 Python 运行...
 echo.
 
 REM 检查Python是否安装
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo 错误：未找到Python环境！
-    echo 请先安装Python 3.6或更高版本。
+    echo 请先安装Python 3.6或更高版本，或使用 dist\C_Disk_Cleaner.exe 运行。
     echo.
     pause
     exit /b 1
