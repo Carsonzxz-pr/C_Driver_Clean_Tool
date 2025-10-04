@@ -4,11 +4,12 @@
 C盘自动清理工具
 作者: Assistant
 时间: 2025-09-21
-版本: 1.1.0
+版本: 1.2.0
 
 功能说明:
 - 自动执行Windows磁盘清理（相当于cleanmgr）
 - 清理系统临时文件、缓存文件等
+- 自动选择最佳策略实现快速清理
 - 提供图形界面和命令行两种使用方式
 - 支持清理前预览和确认机制
 """
@@ -32,11 +33,6 @@ class CDiskCleaner:
     def __init__(self):
         """初始化清理器"""
         self.cleanup_paths = [
-            {
-                "name": "临时文件夹",
-                "path": os.environ.get('TEMP', r'C:\Windows\Temp'),
-                "description": "系统和用户临时文件"
-            },
             {
                 "name": "Windows临时文件",
                 "path": r'C:\Windows\Temp',
@@ -379,12 +375,12 @@ class CDiskCleaner:
         return self.cleaned_size, self.errors
     
     def perform_cleanup_ultra_fast(self, selected_items, progress_callback=None):
-        """超快速清理模式 - 使用Windows原生工具"""
+        """批量快速清理 - 使用Windows原生工具"""
         self.cleaned_size = 0
         self.errors = []
         
         if progress_callback:
-            progress_callback("启动超快速清理模式...")
+            progress_callback("启动批量快速清理...")
         
         try:
             # 先计算清理前的总大小
@@ -452,51 +448,51 @@ class CDiskCleaner:
                             progress_callback(f"⚠ {item['name']} - 没有文件需要清理")
                         
                 except subprocess.TimeoutExpired:
-                    # 超时时尝试fallback到标准模式
+                    # 超时时改用安全方式
                     if progress_callback:
-                        progress_callback(f"⏰ {item['name']} 清理超时，尝试标准方式...")
+                        progress_callback(f"⏰ {item['name']} 清理超时，尝试安全方式...")
                     
                     try:
-                        # 使用标准Python方式清理这个项目
+                        # 使用安全的Python方式清理这个项目
                         cleaned_fallback = self.clean_folder_optimized(path, progress_callback)
                         self.cleaned_size += cleaned_fallback
                         if progress_callback:
-                            progress_callback(f"✓ 标准方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
+                            progress_callback(f"✓ 安全方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
                     except Exception as fallback_e:
-                        self.errors.append(f"清理 {item['name']} 超时且fallback失败: {str(fallback_e)}")
+                        self.errors.append(f"清理 {item['name']} 超时且备用方案失败: {str(fallback_e)}")
                         
                 except Exception as e:
                     if progress_callback:
-                        progress_callback(f"❌ {item['name']} 清理失败，尝试标准方式...")
+                        progress_callback(f"❌ {item['name']} 清理失败，尝试安全方式...")
                     
                     try:
-                        # 出错时也尝试fallback到标准模式
+                        # 出错时同样改用安全方式
                         cleaned_fallback = self.clean_folder_optimized(path, progress_callback)
                         self.cleaned_size += cleaned_fallback
                         if progress_callback:
-                            progress_callback(f"✓ 标准方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
+                            progress_callback(f"✓ 安全方式完成: {item['name']} - 清理了 {self.format_size(cleaned_fallback)}")
                     except Exception as fallback_e:
-                        self.errors.append(f"清理 {item['name']} 失败: {str(e)}, fallback也失败: {str(fallback_e)}")
+                        self.errors.append(f"清理 {item['name']} 失败: {str(e)}, 备用方案也失败: {str(fallback_e)}")
             
             if progress_callback:
-                progress_callback(f"超快速清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
+                progress_callback(f"批量快速清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
                 
         except Exception as e:
-            self.errors.append(f"超快速清理失败: {str(e)}")
+            self.errors.append(f"批量快速清理失败: {str(e)}")
             if progress_callback:
-                progress_callback("超快速清理失败，切换到标准模式...")
-            # fallback到普通清理模式
+                progress_callback("批量快速清理失败，切换到安全方式...")
+            # 改用通用清理流程
             return self.perform_cleanup(selected_items, progress_callback)
         
         return self.cleaned_size, self.errors
     
-    def perform_cleanup_smart(self, selected_items, progress_callback=None):
-        """智能清理模式 - 根据文件大小自动选择最佳清理方式"""
+    def perform_cleanup_quick(self, selected_items, progress_callback=None):
+        """快速清理模式 - 自动选择最佳清理策略"""
         self.cleaned_size = 0
         self.errors = []
         
         if progress_callback:
-            progress_callback("启动智能清理模式...")
+            progress_callback("启动快速清理...")
         
         try:
             # 首先启动系统清理（在后台运行）
@@ -505,26 +501,26 @@ class CDiskCleaner:
             cleanup_thread.start()
             
             # 分析各个清理项目的大小，决定使用哪种清理方式
-            small_items = []  # 小文件夹用标准模式
-            large_items = []  # 大文件夹用超快速模式
+            small_items = []  # 小文件夹用安全方式
+            large_items = []  # 大文件夹用批量快速策略
             
             for item in selected_items:
                 if not os.path.exists(item['path']):
                     continue
                     
                 size = item.get('size', 0)
-                if size > 500 * 1024 * 1024:  # 大于500MB用超快速模式
+                if size > 500 * 1024 * 1024:  # 大于500MB走批量快速策略
                     large_items.append(item)
                 else:
                     small_items.append(item)
             
             if progress_callback:
-                progress_callback(f"智能分析: {len(large_items)}个大项目用超快速模式, {len(small_items)}个小项目用标准模式")
+                progress_callback(f"自动分析: {len(large_items)}个大项目采用批量快速处理, {len(small_items)}个小项目采用安全处理")
             
-            # 先处理大文件夹（超快速模式）
+            # 先处理大文件夹（批量快速策略）
             for item in large_items:
                 if progress_callback:
-                    progress_callback(f"超快速清理: {item['name']}")
+                    progress_callback(f"批量快速清理: {item['name']}")
                 
                 try:
                     path = item['path']
@@ -543,19 +539,19 @@ class CDiskCleaner:
                     self.cleaned_size += cleaned
                     
                     if progress_callback:
-                        progress_callback(f"✓ 超快速完成: {item['name']} - {self.format_size(cleaned)}")
+                        progress_callback(f"✓ 批量快速完成: {item['name']} - {self.format_size(cleaned)}")
                         
                 except subprocess.TimeoutExpired:
                     if progress_callback:
-                        progress_callback(f"⏰ {item['name']} 超时，切换到标准模式...")
-                    # 超时则用标准模式
+                        progress_callback(f"⏰ {item['name']} 超时，切换到安全方式...")
+                    # 超时则用安全方式
                     cleaned = self.clean_folder_optimized(path, progress_callback)
                     self.cleaned_size += cleaned
                     
                 except Exception as e:
-                    self.errors.append(f"智能清理 {item['name']} 失败: {str(e)}")
+                    self.errors.append(f"快速清理 {item['name']} 失败: {str(e)}")
             
-            # 再处理小文件夹（标准模式，并行）
+            # 再处理小文件夹（安全方式，并行）
             if small_items:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 
@@ -578,7 +574,7 @@ class CDiskCleaner:
                             else:
                                 self.cleaned_size += cleaned
                                 if progress_callback:
-                                    progress_callback(f"✓ 标准完成: {name} - {self.format_size(cleaned)}")
+                                    progress_callback(f"✓ 清理完成: {name} - {self.format_size(cleaned)}")
                         except Exception as e:
                             self.errors.append(f"处理 {item['name']} 时出错: {str(e)}")
             
@@ -586,13 +582,13 @@ class CDiskCleaner:
             cleanup_thread.join(timeout=30)
             
             if progress_callback:
-                progress_callback(f"智能清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
+                progress_callback(f"快速清理完成! 总共释放: {self.format_size(self.cleaned_size)}")
                 
         except Exception as e:
-            self.errors.append(f"智能清理失败: {str(e)}")
+            self.errors.append(f"快速清理失败: {str(e)}")
             if progress_callback:
-                progress_callback("智能清理失败，使用标准模式...")
-            # fallback到标准清理模式
+                progress_callback("快速清理失败，改用安全方式...")
+            # 改用通用清理流程
             return self.perform_cleanup(selected_items, progress_callback)
         
         return self.cleaned_size, self.errors
@@ -608,7 +604,7 @@ class CleanerGUI:
         
         # 创建主窗口
         self.root = tk.Tk()
-        self.root.title("C盘自动清理工具 v1.1.0")
+        self.root.title("C盘自动清理工具 v1.2.0")
         self.root.geometry("800x600")
         self.root.resizable(True, True)
         
@@ -687,35 +683,8 @@ class CleanerGUI:
                                             command=self.deselect_all)
         self.deselect_all_button.pack(side=tk.LEFT, padx=(5, 0))
         
-        # 清理模式选择
-        mode_frame = ttk.LabelFrame(button_frame, text="清理模式", padding="2")
-        mode_frame.pack(side=tk.LEFT, padx=(20, 0))
-        
-        self.cleanup_mode = tk.StringVar(value="smart")
-        self.expert_mode = tk.BooleanVar(value=False)
-        
-        # 主要模式选择
-        mode_smart = ttk.Radiobutton(mode_frame, text="智能清理🧠", variable=self.cleanup_mode, 
-                                    value="smart")
-        mode_smart.pack(side=tk.LEFT)
-        
-        mode_fast = ttk.Radiobutton(mode_frame, text="极速清理⚡", variable=self.cleanup_mode, 
-                                   value="ultra_fast")
-        mode_fast.pack(side=tk.LEFT, padx=(5, 0))
-        
-        # 专家模式切换
-        expert_check = ttk.Checkbutton(mode_frame, text="专家", variable=self.expert_mode,
-                                     command=self.toggle_expert_mode)
-        expert_check.pack(side=tk.LEFT, padx=(10, 0))
-        
-        # 兼容模式（默认隐藏）
-        self.mode_normal = ttk.Radiobutton(mode_frame, text="兼容", variable=self.cleanup_mode, 
-                                         value="normal")
-        
-        # 模式说明
-        mode_help = ttk.Label(mode_frame, text="💡", foreground="blue", cursor="hand2")
-        mode_help.pack(side=tk.LEFT, padx=(5, 0))
-        mode_help.bind("<Button-1>", self.show_mode_help)
+        mode_label = ttk.Label(button_frame, text="清理模式：快速清理（自动优化）")
+        mode_label.pack(side=tk.LEFT, padx=(20, 0))
         
         self.clean_button = ttk.Button(button_frame, text="开始清理", 
                                      command=self.start_cleanup, state=tk.DISABLED)
@@ -731,6 +700,7 @@ class CleanerGUI:
         self.progress_label.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         self.progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
+        self.progress_bar.configure(mode='determinate', maximum=100, value=0)
         self.progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
         
         # 日志显示
@@ -781,6 +751,7 @@ class CleanerGUI:
         
     def update_scan_results(self):
         """更新扫描结果"""
+        self.progress_bar.configure(mode='determinate', value=0)
         total_size = 0
         
         for i, item in enumerate(self.cleanup_items):
@@ -852,6 +823,7 @@ class CleanerGUI:
         # 禁用按钮，开始清理
         self.clean_button.config(state=tk.DISABLED)
         self.scan_button.config(state=tk.DISABLED)
+        self.progress_bar.configure(mode='indeterminate', value=0)
         self.progress_bar.start()
         self.progress_var.set("正在清理...")
         
@@ -861,17 +833,8 @@ class CleanerGUI:
                     self.root.after(0, lambda: self.log_message(message))
                     self.root.after(0, lambda: self.progress_var.set(message))
                 
-                # 根据选择的模式执行不同的清理方法
-                cleanup_mode = self.cleanup_mode.get()
-                if cleanup_mode == "smart":
-                    self.log_message("使用智能清理模式...")
-                    cleaned_size, errors = self.cleaner.perform_cleanup_smart(selected_items, progress_callback)
-                elif cleanup_mode == "ultra_fast":
-                    self.log_message("使用超快速清理模式...")
-                    cleaned_size, errors = self.cleaner.perform_cleanup_ultra_fast(selected_items, progress_callback)
-                else:
-                    self.log_message("使用标准清理模式...")
-                    cleaned_size, errors = self.cleaner.perform_cleanup(selected_items, progress_callback)
+                self.log_message("执行快速清理...")
+                cleaned_size, errors = self.cleaner.perform_cleanup_quick(selected_items, progress_callback)
                 
                 # 清理完成，更新UI
                 self.root.after(0, lambda: self.cleanup_completed(cleaned_size, errors))
@@ -895,7 +858,10 @@ class CleanerGUI:
                 self.log_message(f"  - {error}")
             if len(errors) > 10:
                 self.log_message(f"  ... 还有 {len(errors) - 10} 个错误")
-        
+
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode='determinate', value=100)
+
         # 显示完成对话框
         message = f"清理完成！\n\n释放空间：{cleaned_size_str}"
         if errors:
@@ -906,55 +872,11 @@ class CleanerGUI:
     def cleanup_finished(self):
         """清理结束后恢复界面"""
         self.progress_bar.stop()
+        self.progress_bar.configure(mode='determinate', value=100)
         self.progress_var.set("清理完成")
         self.clean_button.config(state=tk.NORMAL)
         self.scan_button.config(state=tk.NORMAL)
         self.status_var.set("清理完成，可以重新扫描")
-        
-    def show_mode_help(self, event):
-        """显示清理模式帮助信息"""
-        help_text = """清理模式说明：
-
-🧠 智能清理（默认推荐）：
-• 程序自动选择最佳清理方式
-• 大文件用极速模式，小文件用安全模式
-• 智能避免各种问题，适合所有用户
-• 99%的情况下这是最佳选择
-
-⚡ 极速清理：
-• 全部使用Windows批处理命令
-• 速度最快，但在某些环境可能不稳定
-• 适合高级用户和文件较少的情况
-
-🔧 兼容模式（专家选项）：
-• 逐个文件处理，最高兼容性
-• 适用于：企业环境、老旧系统、调试问题
-• 速度较慢，但几乎不会出错
-
-❓ 为什么需要多种模式：
-• 不同Windows版本和配置差异很大
-• 某些杀毒软件可能阻止批处理命令
-• 网络驱动器和特殊文件系统需要兼容处理
-• 调试时需要详细的错误信息
-
-💡 建议：
-• 新手用户：直接用智能清理
-• 高级用户：可尝试极速清理
-• 遇到问题：勾选"专家"使用兼容模式"""
-        
-        messagebox.showinfo("清理模式说明", help_text)
-        
-    def toggle_expert_mode(self):
-        """切换专家模式显示"""
-        if self.expert_mode.get():
-            # 显示兼容模式选项
-            self.mode_normal.pack(side=tk.LEFT, padx=(5, 0), before=self.mode_normal.master.children['!label'])
-        else:
-            # 隐藏兼容模式选项
-            self.mode_normal.pack_forget()
-            # 如果当前选择的是兼容模式，自动切换到智能模式
-            if self.cleanup_mode.get() == "normal":
-                self.cleanup_mode.set("smart")
         
     def run(self):
         """运行GUI"""
